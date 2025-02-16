@@ -1,4 +1,4 @@
-use crate::card::{Card, Rank, Suit};
+use serde::Serialize;
 use crate::game::GameAction::{Double, Hit, Split, Stand};
 use crate::game::GameState::WaitingToDeal;
 use crate::game_settings::GameSettings;
@@ -6,15 +6,39 @@ use crate::hand::{Hand, HandOutcome};
 use crate::player::Player;
 use crate::shoe::Shoe;
 
+/// Represents a blackjack game instance.
+///
+/// The Game struct manages the entire state of a blackjack game, including
+/// players, cards, and game progression. It implements standard casino
+/// blackjack rules and handles all game actions and state transitions.
 pub struct Game {
+    /// Configuration settings for the game
     pub settings: GameSettings,
+    /// The shoe containing all cards for the game
     pub shoe: Shoe,
+    /// The main player
     pub player: Player,
+    /// The dealer
     pub dealer: Player,
+    /// Current state of the game
     pub state: GameState,
 }
 
 impl Game {
+    /// Creates a new blackjack game with the specified settings.
+    ///
+    /// # Arguments
+    ///
+    /// * `settings` - Configuration settings for the game
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use blackjack_engine::game::Game;
+    /// use blackjack_engine::game_settings::GameSettings;
+    /// let settings = GameSettings::default_single_player("Player1".to_string());
+    /// let game = Game::new(settings);
+    /// ```
     pub fn new(settings: GameSettings) -> Game {
         let player = Player::new();
         let bankroll = player.bank_roll;
@@ -27,14 +51,25 @@ impl Game {
         }
     }
 
+    /// Returns a reference to the current game state.
     pub fn get_state(&self) -> &GameState {
         &self.state
     }
 
+    /// Shuffles all cards in the shoe.
     pub fn shuffle_shoe(&mut self) {
         self.shoe.shuffle();
     }
 
+    /// Processes a player's bet attempt.
+    ///
+    /// Validates that the player has sufficient funds and updates the game
+    /// state accordingly. If the bet is invalid, prints an error message
+    /// and maintains the current state.
+    ///
+    /// # Arguments
+    ///
+    /// * `bet` - The amount the player wants to bet
     pub fn accept_user_bet(&mut self, bet: f64) {
         if self.player.bank_roll < bet {
             println!("You cannot bet more than you have");
@@ -45,6 +80,13 @@ impl Game {
         self.state = WaitingToDeal { player_bet: bet, player_bankroll: self.player.bank_roll }
     }
 
+    /// Deals the initial two cards to both player and dealer.
+    ///
+    /// This method:
+    /// 1. Ensures sufficient cards are available
+    /// 2. Deals alternating cards to player and dealer
+    /// 3. Checks for natural blackjacks
+    /// 4. Updates game state based on initial hands
     pub fn deal_initial_cards(&mut self) {
         // Deal two cards to player and dealer
         self.shoe.ensure_cards_for_players(1);
@@ -57,12 +99,12 @@ impl Game {
             }
         }
 
+        // Handle natural blackjacks
         if self.player.hands[0].is_natural_blackjack() {
             if self.dealer.hands[0].is_natural_blackjack() {
-                // push, add the bet back to player bankroll
+                // Push - return bet to player
                 self.player.bank_roll += self.player.hands[0].bet;
                 self.player.hands[0].outcome = Option::from(HandOutcome::Push);
-
                 self.state = GameState::RoundComplete {
                     dealer_hand: self.dealer.hands[0].clone(),
                     player_hands: self.player.hands.clone(),
@@ -70,6 +112,7 @@ impl Game {
                 };
                 return;
             } else {
+                // Player blackjack pays 3:2
                 self.player.bank_roll += self.player.hands[0].bet * 2.5;
                 self.player.hands[0].outcome = Option::from(HandOutcome::Blackjack);
                 self.state = GameState::RoundComplete {
@@ -91,6 +134,7 @@ impl Game {
             return;
         }
 
+        // No blackjacks - proceed to player's turn
         self.state = GameState::PlayerTurn {
             dealer_hand: self.dealer.hands[0].clone(),
             player_hands: self.player.hands.clone(),
@@ -99,6 +143,18 @@ impl Game {
         }
     }
 
+    /// Processes a player's action during their turn.
+    ///
+    /// # Arguments
+    ///
+    /// * `action` - The action chosen by the player (Hit, Stand, Double, or Split)
+    /// * `hand_index` - Index of the hand being played (relevant for split hands)
+    ///
+    /// Handles all possible player actions including:
+    /// - Hit: Draw another card
+    /// - Stand: End turn for current hand
+    /// - Double: Double bet and take one card
+    /// - Split: Split matching cards into two hands
     pub fn process_player_action(&mut self, action: GameAction, hand_index: usize) {
         match action {
             Hit => {
@@ -216,7 +272,7 @@ impl Game {
                     self.player.bank_roll -= new_bet;  // Deduct additional bet for new hand
 
                     // Add second hand with split card at index + 1
-                    let mut new_hand = Hand::with_card_and_bet(split_card, new_bet);
+                    let new_hand = Hand::with_card_and_bet(split_card, new_bet);
                     self.player.hands.insert(hand_index + 1, new_hand);
 
                     // Draw a card for the first hand only
@@ -234,6 +290,12 @@ impl Game {
         }
     }
 
+    /// Processes the dealer's turn according to standard casino rules.
+    ///
+    /// The dealer must:
+    /// - Hit on 16 or below
+    /// - Stand on 17 or above
+    /// - Continue until reaching 17+ or busting
     pub fn next_dealer_turn(&mut self) {
         match self.state {
             GameState::DealerTurn { dealer_hand: _, player_hands: _, player_bankroll: _, .. } => {
@@ -266,12 +328,21 @@ impl Game {
         }
     }
 
+    /// Prepares the game for a new round.
+    ///
+    /// Resets all hands and returns to the betting state.
     pub fn next_round(&mut self) {
         self.player.reset_hands();
         self.dealer.reset_hands();
         self.state = GameState::WaitingForBet { player_bankroll: self.player.bank_roll }
     }
 
+    /// Determines the winner(s) and updates player bankroll accordingly.
+    ///
+    /// Compares dealer and player hand values according to standard blackjack rules:
+    /// - Dealer bust: All non-busted player hands win
+    /// - Otherwise: Higher hand value wins
+    /// - Equal values: Push (tie)
     pub fn determine_winner_and_complete_round(&mut self) {
         let dealer_hand = &self.dealer.hands[0];
         let dealer_value = dealer_hand.best_value();
@@ -303,18 +374,25 @@ impl Game {
     }
 }
 
-pub enum PlayerType {
-    MainPlayer,
-    Dealer,
-    Other(u32),
-}
-
+/// Represents possible actions a player can take during their turn.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum GameAction {
-    Hit, Stand, Double, Split
+    Hit,
+    Stand,
+    Double,
+    Split
 }
 
 impl GameAction {
+    /// Converts a string input to a GameAction.
+    ///
+    /// # Arguments
+    ///
+    /// * `value` - The string to convert
+    ///
+    /// # Returns
+    ///
+    /// Option<GameAction> - Some(action) if valid input, None if invalid
     pub fn from_string(value: &str) -> Option<GameAction> {
         match value.to_lowercase().trim() {
             "h" | "hit" => Some(Hit),
@@ -325,6 +403,7 @@ impl GameAction {
         }
     }
 
+    /// Converts the action to its string representation.
     pub fn to_string(&self) -> String {
         match self {
             Hit => "HIT".to_string(),
@@ -335,30 +414,32 @@ impl GameAction {
     }
 }
 
-pub enum HandResult {
-    Blackjack, Bust, Other(Vec<i32>)
-}
-
+/// Represents the current state of the game.
 #[derive(PartialEq, Clone)]
 pub enum GameState {
+    /// Waiting for player to place initial bet
     WaitingForBet {
         player_bankroll: f64,
     },
+    /// Bet placed, waiting to deal cards
     WaitingToDeal {
         player_bet: f64,
         player_bankroll: f64,
     },
+    /// Player's turn to act
     PlayerTurn {
         dealer_hand: Hand,
         player_hands: Vec<Hand>,
         player_bankroll: f64,
         active_hand_index: usize,
     },
+    /// Dealer's turn to act
     DealerTurn {
         dealer_hand: Hand,
         player_hands: Vec<Hand>,
         player_bankroll: f64,
     },
+    /// Round is complete, showing results
     RoundComplete {
         dealer_hand: Hand,
         player_hands: Vec<Hand>,
@@ -366,13 +447,77 @@ pub enum GameState {
     }
 }
 
-#[derive(Clone)]
-pub struct GameStateDTO {
+/// Represents the complete game state with optional fields
+/// depending on the current phase of the game.
+#[derive(Clone, Debug, Serialize)]  // Add serde for JSON serialization
+pub struct GameStateDto {
+    /// Current phase of the game
+    pub phase: GamePhase,
+    /// Player's current bankroll
     pub player_bankroll: f64,
+    /// Current bet amount, if a bet has been placed
+    pub player_bet: Option<f64>,
+    /// Dealer's hand, if cards have been dealt
+    pub dealer_hand: Option<Hand>,
+    /// Player's hands (multiple possible due to splits)
+    pub player_hands: Option<Vec<Hand>>,
+    /// Index of the active hand (relevant during player turns)
+    pub active_hand_index: Option<usize>,
 }
 
-impl GameStateDTO {
-    pub fn new(player_bankroll: f64) -> Self {
-        Self { player_bankroll}
+/// Represents the current phase of the game
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub enum GamePhase {
+    WaitingForBet,
+    WaitingToDeal,
+    PlayerTurn,
+    DealerTurn,
+    RoundComplete,
+}
+
+impl From<GameState> for GameStateDto {
+    fn from(state: GameState) -> Self {
+        match state {
+            GameState::WaitingForBet { player_bankroll } => GameStateDto {
+                phase: GamePhase::WaitingForBet,
+                player_bankroll,
+                player_bet: None,
+                dealer_hand: None,
+                player_hands: None,
+                active_hand_index: None,
+            },
+            GameState::WaitingToDeal { player_bet, player_bankroll } => GameStateDto {
+                phase: GamePhase::WaitingToDeal,
+                player_bankroll,
+                player_bet: Some(player_bet),
+                dealer_hand: None,
+                player_hands: None,
+                active_hand_index: None,
+            },
+            GameState::PlayerTurn { dealer_hand, player_hands, player_bankroll, active_hand_index } => GameStateDto {
+                phase: GamePhase::PlayerTurn,
+                player_bankroll,
+                player_bet: player_hands.first().map(|h| h.bet),
+                dealer_hand: Some(dealer_hand),
+                player_hands: Some(player_hands),
+                active_hand_index: Some(active_hand_index),
+            },
+            GameState::DealerTurn { dealer_hand, player_hands, player_bankroll } => GameStateDto {
+                phase: GamePhase::DealerTurn,
+                player_bankroll,
+                player_bet: player_hands.first().map(|h| h.bet),
+                dealer_hand: Some(dealer_hand),
+                player_hands: Some(player_hands),
+                active_hand_index: None,
+            },
+            GameState::RoundComplete { dealer_hand, player_hands, player_bankroll } => GameStateDto {
+                phase: GamePhase::RoundComplete,
+                player_bankroll,
+                player_bet: player_hands.first().map(|h| h.bet),
+                dealer_hand: Some(dealer_hand),
+                player_hands: Some(player_hands),
+                active_hand_index: None,
+            },
+        }
     }
 }
